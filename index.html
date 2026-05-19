@@ -78,7 +78,6 @@
         .catch(err => console.error("BLE Write error: ", err));
     }
 
-    // --- PACKAGING ALL MOVEMENT COMMANDS WITH A NEWLINE (\n) ---
     function startDriving(cmdChar) {
       if (driveInterval) return; 
       
@@ -96,15 +95,16 @@
       }
     }
 
+    // --- FIX: UPDATED MODE LETTERS TO MATCH NEW LOWERCASE PIC32 PARSER ---
     function switchMode(mode) {
       if (driveInterval) {
         clearInterval(driveInterval);
         driveInterval = null;
       }
 
-      if(mode === 'manual') sendBLECommand("M\n");
-      if(mode === 'line')   sendBLECommand("L\n");
-      if(mode === 'wall')   sendBLECommand("W\n");
+      if(mode === 'manual') sendBLECommand("m\n");
+      if(mode === 'line')   sendBLECommand("l\n");
+      if(mode === 'wall')   sendBLECommand("w\n");
 
       document.querySelectorAll('.tab-content').forEach(tab => tab.classList.remove('active'));
       document.querySelectorAll('.tab-btn').forEach(btn => btn.classList.remove('active'));
