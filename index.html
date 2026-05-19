@@ -1,17 +1,20 @@
 <!DOCTYPE html>
 <html>
 <head>
-  <title>BLE Robot Controller</title>
+  <title>ESP32 BLE Robot Controller</title>
   <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
   <style>
     body { font-family: Arial; text-align: center; margin-top: 20px; background-color: #222; color: white;}
+    .connect-container { margin-bottom: 20px; }
+    .connect-btn { background-color: #ffc107; color: black; border: none; padding: 12px 30px; font-size: 18px; font-weight: bold; border-radius: 5px; cursor: pointer; }
+    .connect-btn.connected { background-color: #28a745; color: white; }
     .tab-container { display: flex; justify-content: center; gap: 5px; margin-bottom: 20px; flex-wrap: wrap; }
     .tab-btn { background-color: #444; color: white; border: none; padding: 10px 20px; font-size: 16px; border-radius: 5px; cursor: pointer; }
     .tab-btn.active { background-color: #007BFF; font-weight: bold; }
     .tab-content { display: none; padding: 20px; background-color: #333; border-radius: 10px; margin: 0 auto; max-width: 400px; }
     .tab-content.active { display: block; }
     .grid-container { display: grid; grid-template-columns: repeat(3, 80px); gap: 10px; justify-content: center; margin-top: 20px;}
-    .btn { background-color: #007BFF; color: white; border: none; border-radius: 10px; font-size: 24px; font-weight: bold; width: 80px; height: 80px; user-select: none; touch-action: manipulation; }
+    .btn { background-color: #007BFF; color: white; border: none; border-radius: 10px; font-size: 24px; font-weight: bold; width: 80px; height: 80px; user-select: none; touch-action: manipulation;}
     .btn:active { background-color: #0056b3; }
     .empty { visibility: hidden; }
     .sensor-row { display: flex; justify-content: space-around; margin: 20px 0; font-size: 18px;}
@@ -19,13 +22,149 @@
     .input-group { margin-bottom: 15px; display: flex; justify-content: space-between; align-items: center; }
     .input-group input { width: 60px; padding: 5px; font-size: 16px; text-align: center; }
     .update-btn { background-color: #28a745; color: white; border: none; padding: 5px 15px; border-radius: 5px; font-size: 16px; cursor: pointer;}
-    #ble-connect { background-color: #ff9800; color: white; border: none; padding: 15px; border-radius: 10px; font-size: 18px; cursor: pointer; font-weight: bold; margin-bottom: 20px; width: 90%; max-width: 400px; }
   </style>
+  
+  <script>
+    // --- BLE Hardware Configuration (Must perfectly match your ESP32) ---
+    const SERVICE_UUID           = "19b10000-e8f2-537e-4f6c-d104768a1214";
+    const CHARACTERISTIC_UUID_RX = "19b10001-e8f2-537e-4f6c-d104768a1214"; // Web Writes here
+    const CHARACTERISTIC_UUID_TX = "19b10002-e8f2-537e-4f6c-d104768a1214"; // Web Listens here
+
+    let bleDevice = null;
+    let rxCharacteristic = null; // Used to transmit directions/variables to ESP32
+    let driveInterval = null;    // Controls repeating loop when buttons are held
+
+    // --- Web Bluetooth Connection Logic ---
+    async function connectBluetooth() {
+      const connectBtn = document.getElementById('connect-btn');
+      try {
+        console.log("Requesting Bluetooth Device...");
+        bleDevice = await navigator.bluetooth.requestDevice({
+          filters: [{ name: 'ESP32_Robot' }],
+          optionalServices: [SERVICE_UUID]
+        });
+
+        console.log("Connecting to GATT Server...");
+        const server = await bleDevice.gatt.connect();
+
+        console.log("Getting primary BLE Service...");
+        const service = await server.getPrimaryService(SERVICE_UUID);
+
+        console.log("Getting Characteristics...");
+        rxCharacteristic = await service.getCharacteristic(CHARACTERISTIC_UUID_RX);
+        const txCharacteristic = await service.getCharacteristic(CHARACTERISTIC_UUID_TX);
+
+        // Subscribe to notifications for live data streams (replaces old /sensors endpoint polling)
+        await txCharacteristic.startNotifications();
+        txCharacteristic.addEventListener('characteristicvaluechanged', handleIncomingSensors);
+
+        connectBtn.innerText = "Connected";
+        connectBtn.classList.add('connected');
+        console.log("BLE Connection Successful!");
+
+        bleDevice.addEventListener('gattserverdisconnected', () => {
+          connectBtn.innerText = "Pair Robot";
+          connectBtn.classList.remove('connected');
+          alert("Bluetooth Disconnected!");
+        });
+
+      } catch (error) {
+        console.error("Bluetooth Setup Failed: ", error);
+        alert("Connection Failed. Make sure the ESP32 is powered on and your browser supports Web Bluetooth.");
+      }
+    }
+
+    // --- High Speed Command Transmission Helper ---
+    function sendBLECommand(cmdString) {
+      if (!rxCharacteristic) {
+        console.warn("Cannot send command: Robot not connected over BLE.");
+        return;
+      }
+      let encoder = new TextEncoder();
+      rxCharacteristic.writeValue(encoder.encode(cmdString))
+        .catch(err => console.error("BLE Write error: ", err));
+    }
+
+    // --- Continuous Button Holding Loops ---
+    function startDriving(cmdChar) {
+      if (driveInterval) return; // Prevent multiple overlapping loops
+      
+      sendBLECommand(cmdChar); // Send command immediately once
+      
+      // Keep sending the command character every 100ms while held
+      driveInterval = setInterval(() => {
+        sendBLECommand(cmdChar);
+      }, 100);
+    }
+
+    function stopDriving() {
+      if (driveInterval) {
+        clearInterval(driveInterval);
+        driveInterval = null;
+      }
+      sendBLECommand('S'); // Send raw STOP code
+    }
+
+    // --- Mode Management ---
+    function switchMode(mode) {
+      if(mode === 'manual') sendBLECommand('M');
+      if(mode === 'line')   sendBLECommand('L');
+      if(mode === 'wall')   sendBLECommand('W');
+
+      document.querySelectorAll('.tab-content').forEach(tab => tab.classList.remove('active'));
+      document.querySelectorAll('.tab-btn').forEach(btn => btn.classList.remove('active'));
+      
+      document.getElementById('content-' + mode).classList.add('active');
+      document.getElementById('btn-' + mode).classList.add('active');
+    }
+
+    // --- Tuning Variable Submissions ---
+    function updateVariable(paramName, inputId) {
+      let val = document.getElementById(inputId).value;
+      let payload = "";
+
+      // Format command keys to match original PIC32 protocol expectations
+      if (paramName === "m_speedl")    payload = "VL" + val + "\n";
+      if (paramName === "m_speedr")    payload = "VR" + val + "\n";
+      if (paramName === "line_turn")   payload = "T" + val + "\n";
+      if (paramName === "wall_target") payload = "G" + val + "\n";
+      if (paramName === "wall_speed")  payload = "Z" + val + "\n";
+
+      sendBLECommand(payload);
+    }
+
+    // --- Inbound Live Sensor Parser ---
+    function handleIncomingSensors(event) {
+      let decoder = new TextDecoder('utf-8');
+      let incomingString = decoder.decode(event.target.value);
+      
+      // Expected incoming stream format: irLeft,irCenter,irRight,usLeft,usFront,usRight
+      let data = incomingString.split(',');
+      
+      if (data.length >= 6) {
+        let irL = parseInt(data[0]);
+        let irC = parseInt(data[1]);
+        let irR = parseInt(data[2]);
+        
+        // Update IR indicator circles (White = True/Detected, Black = False)
+        document.getElementById('ir-left').style.backgroundColor = irL ? "white" : "black";
+        document.getElementById('ir-center').style.backgroundColor = irC ? "white" : "black";
+        document.getElementById('ir-right').style.backgroundColor = irR ? "white" : "black";
+
+        // Update Ultrasonic text indicators
+        document.getElementById('us-left').innerText = data[3] + " cm";
+        document.getElementById('us-front').innerText = data[4] + " cm";
+        document.getElementById('us-right').innerText = data[5] + " cm";
+      }
+    }
+  </script>
 </head>
 <body>
   <h2>Robot Control Panel</h2>
-  
-  <button id="ble-connect" onclick="connectBLE()">Connect to Robot (Bluetooth)</button>
+
+  <div class="connect-container">
+    <button id="connect-btn" class="connect-btn" onclick="connectBluetooth()">Pair Robot</button>
+  </div>
   
   <div class="tab-container">
     <button id="btn-manual" class="tab-btn active" onclick="switchMode('manual')">Manual</button>
@@ -37,11 +176,11 @@
     <p>Press and hold buttons to move</p>
     <div class="grid-container">
       <div class="empty"></div>
-      <button class="btn" onmousedown="sendCommand('w')" onmouseup="sendCommand('S')" ontouchstart="sendCommand('w')" ontouchend="sendCommand('S')">W</button>
+      <button class="btn" onmousedown="startDriving('U')" onmouseup="stopDriving()" ontouchstart="startDriving('U')" ontouchend="stopDriving()">W</button>
       <div class="empty"></div>
-      <button class="btn" onmousedown="sendCommand('a')" onmouseup="sendCommand('S')" ontouchstart="sendCommand('a')" ontouchend="sendCommand('S')">A</button>
-      <button class="btn" onmousedown="sendCommand('s')" onmouseup="sendCommand('S')" ontouchstart="sendCommand('s')" ontouchend="sendCommand('S')">S</button>
-      <button class="btn" onmousedown="sendCommand('d')" onmouseup="sendCommand('S')" ontouchstart="sendCommand('d')" ontouchend="sendCommand('S')">D</button>
+      <button class="btn" onmousedown="startDriving('L')" onmouseup="stopDriving()" ontouchstart="startDriving('L')" ontouchend="stopDriving()">A</button>
+      <button class="btn" onmousedown="startDriving('D')" onmouseup="stopDriving()" ontouchstart="startDriving('D')" ontouchend="stopDriving()">S</button>
+      <button class="btn" onmousedown="startDriving('R')" onmouseup="stopDriving()" ontouchstart="startDriving('R')" ontouchend="stopDriving()">D</button>
     </div>
     <hr>
     <h3>Tuning Variables</h3>
@@ -103,102 +242,5 @@
       <button class="update-btn" onclick="updateVariable('wall_speed', 'wf-speed')">Set</button>
     </div>
   </div>
-
-  <script>
-    // BLE Variables
-    var bleDevice;
-    var txCharacteristic; // Web sends to this
-    var rxCharacteristic; // Web receives from this
-    const serviceUuid = "19b10000-e8f2-537e-4f6c-d104768a1214";
-    const txUuid = "19b10001-e8f2-537e-4f6c-d104768a1214";
-    const rxUuid = "19b10002-e8f2-537e-4f6c-d104768a1214";
-
-    async function connectBLE() {
-      try {
-        console.log('Requesting Bluetooth Device...');
-        bleDevice = await navigator.bluetooth.requestDevice({
-          filters: [{ name: 'ESP32_Robot' }],
-          optionalServices: [serviceUuid]
-        });
-
-        console.log('Connecting to GATT Server...');
-        const server = await bleDevice.gatt.connect();
-
-        console.log('Getting Service...');
-        const service = await server.getPrimaryService(serviceUuid);
-
-        console.log('Getting Characteristics...');
-        txCharacteristic = await service.getCharacteristic(txUuid);
-        rxCharacteristic = await service.getCharacteristic(rxUuid);
-
-        // Start listening to sensors
-        await rxCharacteristic.startNotifications();
-        rxCharacteristic.addEventListener('characteristicvaluechanged', handleSensorData);
-
-        document.getElementById("ble-connect").style.backgroundColor = "#4CAF50";
-        document.getElementById("ble-connect").innerText = "Bluetooth Connected!";
-      } catch(error) {
-        console.log('Connection failed!', error);
-      }
-    }
-
-    async function writeBLE(dataStr) {
-      if (!txCharacteristic) {
-        console.log("Not connected to BLE yet");
-        return;
-      }
-      let encoder = new TextEncoder();
-      await txCharacteristic.writeValue(encoder.encode(dataStr));
-    }
-
-    function handleSensorData(event) {
-      let decoder = new TextDecoder();
-      let dataStr = decoder.decode(event.target.value);
-      // Expected: irLeft,irCenter,irRight,usLeft,usFront,usRight
-      let data = dataStr.split(',');
-      if(data.length >= 6) {
-        document.getElementById('ir-left').style.backgroundColor = parseInt(data[0]) ? "white" : "black";
-        document.getElementById('ir-center').style.backgroundColor = parseInt(data[1]) ? "white" : "black";
-        document.getElementById('ir-right').style.backgroundColor = parseInt(data[2]) ? "white" : "black";
-        document.getElementById('us-left').innerText = data[3] + " cm";
-        document.getElementById('us-front').innerText = data[4] + " cm";
-        document.getElementById('us-right').innerText = data[5] + " cm";
-      }
-    }
-
-    function switchMode(mode) {
-      if(mode === 'manual') writeBLE('M');
-      if(mode === 'line') writeBLE('L');
-      if(mode === 'wall') writeBLE('W');
-
-      document.querySelectorAll('.tab-content').forEach(tab => tab.classList.remove('active'));
-      document.querySelectorAll('.tab-btn').forEach(btn => btn.classList.remove('active'));
-      
-      document.getElementById('content-' + mode).classList.add('active');
-      document.getElementById('btn-' + mode).classList.add('active');
-    }
-
-    function sendCommand(cmd) {
-      // Replicating original ESP32 HTTP-to-Serial mappings
-      if (cmd === 'w') writeBLE('U');
-      else if (cmd === 's') writeBLE('D');
-      else if (cmd === 'a') writeBLE('L');
-      else if (cmd === 'd') writeBLE('R');
-      else if (cmd === 'S') writeBLE('S');
-    }
-
-    function updateVariable(paramName, inputId) {
-      let val = document.getElementById(inputId).value;
-      // Replicating original ESP32 HTTP-to-Serial mappings
-      let commandString = "";
-      if (paramName === "m_speedl") commandString = "VL" + val + "\n";
-      if (paramName === "m_speedr") commandString = "VR" + val + "\n";
-      if (paramName === "line_turn") commandString = "T" + val + "\n";
-      if (paramName === "wall_target") commandString = "G" + val + "\n";
-      if (paramName === "wall_speed") commandString = "Z" + val + "\n";
-      
-      if(commandString !== "") writeBLE(commandString);
-    }
-  </script>
 </body>
 </html>
