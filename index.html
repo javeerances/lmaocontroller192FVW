@@ -25,16 +25,14 @@
   </style>
   
   <script>
-    // --- BLE Hardware Configuration (Must perfectly match your ESP32) ---
     const SERVICE_UUID           = "19b10000-e8f2-537e-4f6c-d104768a1214";
-    const CHARACTERISTIC_UUID_RX = "19b10001-e8f2-537e-4f6c-d104768a1214"; // Web Writes here
-    const CHARACTERISTIC_UUID_TX = "19b10002-e8f2-537e-4f6c-d104768a1214"; // Web Listens here
+    const CHARACTERISTIC_UUID_RX = "19b10001-e8f2-537e-4f6c-d104768a1214"; 
+    const CHARACTERISTIC_UUID_TX = "19b10002-e8f2-537e-4f6c-d104768a1214"; 
 
     let bleDevice = null;
-    let rxCharacteristic = null; // Used to transmit directions/variables to ESP32
-    let driveInterval = null;    // Controls repeating loop when buttons are held
+    let rxCharacteristic = null; 
+    let driveInterval = null;    
 
-    // --- Web Bluetooth Connection Logic ---
     async function connectBluetooth() {
       const connectBtn = document.getElementById('connect-btn');
       try {
@@ -54,7 +52,6 @@
         rxCharacteristic = await service.getCharacteristic(CHARACTERISTIC_UUID_RX);
         const txCharacteristic = await service.getCharacteristic(CHARACTERISTIC_UUID_TX);
 
-        // Subscribe to notifications for live data streams (replaces old /sensors endpoint polling)
         await txCharacteristic.startNotifications();
         txCharacteristic.addEventListener('characteristicvaluechanged', handleIncomingSensors);
 
@@ -70,14 +67,13 @@
 
       } catch (error) {
         console.error("Bluetooth Setup Failed: ", error);
-        alert("Connection Failed. Make sure the ESP32 is powered on and your browser supports Web Bluetooth.");
+        alert("Connection Failed. Check ESP32 power and browser compatibility.");
       }
     }
 
-    // --- High Speed Command Transmission Helper ---
     function sendBLECommand(cmdString) {
       if (!rxCharacteristic) {
-        console.warn("Cannot send command: Robot not connected over BLE.");
+        console.warn("Cannot send command: Robot not connected.");
         return;
       }
       let encoder = new TextEncoder();
@@ -85,13 +81,10 @@
         .catch(err => console.error("BLE Write error: ", err));
     }
 
-    // --- Continuous Button Holding Loops ---
     function startDriving(cmdChar) {
-      if (driveInterval) return; // Prevent multiple overlapping loops
+      if (driveInterval) return; 
       
-      sendBLECommand(cmdChar); // Send command immediately once
-      
-      // Keep sending the command character every 100ms while held
+      sendBLECommand(cmdChar); 
       driveInterval = setInterval(() => {
         sendBLECommand(cmdChar);
       }, 100);
@@ -101,16 +94,24 @@
       if (driveInterval) {
         clearInterval(driveInterval);
         driveInterval = null;
+        sendBLECommand('S'); // Only send stop command if a driving loop was actually active!
       }
-      sendBLECommand('S'); // Send raw STOP code
     }
 
-    // --- Mode Management ---
+    // --- FIXES IMPLEMENTED IN MODE SWITCHING ---
     function switchMode(mode) {
-      if(mode === 'manual') sendBLECommand('M');
-      if(mode === 'line')   sendBLECommand('L');
-      if(mode === 'wall')   sendBLECommand('W');
+      // 1. Immediately kill any looping manual drive intervals so they don't overwrite our new mode
+      if (driveInterval) {
+        clearInterval(driveInterval);
+        driveInterval = null;
+      }
 
+      // 2. Add explicit '\n' terminators so the PIC32 parses them cleanly away from background data
+      if(mode === 'manual') sendBLECommand("M\n");
+      if(mode === 'line')   sendBLECommand("L\n");
+      if(mode === 'wall')   sendBLECommand("W\n");
+
+      // Update UI Tabs
       document.querySelectorAll('.tab-content').forEach(tab => tab.classList.remove('active'));
       document.querySelectorAll('.tab-btn').forEach(btn => btn.classList.remove('active'));
       
@@ -118,12 +119,10 @@
       document.getElementById('btn-' + mode).classList.add('active');
     }
 
-    // --- Tuning Variable Submissions ---
     function updateVariable(paramName, inputId) {
       let val = document.getElementById(inputId).value;
       let payload = "";
 
-      // Format command keys to match original PIC32 protocol expectations
       if (paramName === "m_speedl")    payload = "VL" + val + "\n";
       if (paramName === "m_speedr")    payload = "VR" + val + "\n";
       if (paramName === "line_turn")   payload = "T" + val + "\n";
@@ -133,12 +132,9 @@
       sendBLECommand(payload);
     }
 
-    // --- Inbound Live Sensor Parser ---
     function handleIncomingSensors(event) {
       let decoder = new TextDecoder('utf-8');
       let incomingString = decoder.decode(event.target.value);
-      
-      // Expected incoming stream format: irLeft,irCenter,irRight,usLeft,usFront,usRight
       let data = incomingString.split(',');
       
       if (data.length >= 6) {
@@ -146,12 +142,10 @@
         let irC = parseInt(data[1]);
         let irR = parseInt(data[2]);
         
-        // Update IR indicator circles (White = True/Detected, Black = False)
         document.getElementById('ir-left').style.backgroundColor = irL ? "white" : "black";
         document.getElementById('ir-center').style.backgroundColor = irC ? "white" : "black";
         document.getElementById('ir-right').style.backgroundColor = irR ? "white" : "black";
 
-        // Update Ultrasonic text indicators
         document.getElementById('us-left').innerText = data[3] + " cm";
         document.getElementById('us-front').innerText = data[4] + " cm";
         document.getElementById('us-right').innerText = data[5] + " cm";
