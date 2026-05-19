@@ -72,21 +72,19 @@
     }
 
     function sendBLECommand(cmdString) {
-      if (!rxCharacteristic) {
-        console.warn("Cannot send command: Robot not connected.");
-        return;
-      }
+      if (!rxCharacteristic) return;
       let encoder = new TextEncoder();
       rxCharacteristic.writeValue(encoder.encode(cmdString))
         .catch(err => console.error("BLE Write error: ", err));
     }
 
+    // --- PACKAGING ALL MOVEMENT COMMANDS WITH A NEWLINE (\n) ---
     function startDriving(cmdChar) {
       if (driveInterval) return; 
       
-      sendBLECommand(cmdChar); 
+      sendBLECommand(cmdChar + "\n"); 
       driveInterval = setInterval(() => {
-        sendBLECommand(cmdChar);
+        sendBLECommand(cmdChar + "\n");
       }, 100);
     }
 
@@ -94,30 +92,29 @@
       if (driveInterval) {
         clearInterval(driveInterval);
         driveInterval = null;
-        sendBLECommand('S'); // Only send stop command if a driving loop was actually active!
+        sendBLECommand("S\n"); 
       }
     }
 
-    // --- FIXES IMPLEMENTED IN MODE SWITCHING ---
     function switchMode(mode) {
-      // 1. Immediately kill any looping manual drive intervals so they don't overwrite our new mode
       if (driveInterval) {
         clearInterval(driveInterval);
         driveInterval = null;
       }
 
-      // 2. Add explicit '\n' terminators so the PIC32 parses them cleanly away from background data
       if(mode === 'manual') sendBLECommand("M\n");
       if(mode === 'line')   sendBLECommand("L\n");
       if(mode === 'wall')   sendBLECommand("W\n");
 
-      // Update UI Tabs
       document.querySelectorAll('.tab-content').forEach(tab => tab.classList.remove('active'));
       document.querySelectorAll('.tab-btn').forEach(btn => btn.classList.remove('active'));
       
       document.getElementById('content-' + mode).classList.add('active');
       document.getElementById('btn-' + mode).classList.add('active');
     }
+
+    document.addEventListener("mouseup", stopDriving);
+    document.addEventListener("touchend", stopDriving);
 
     function updateVariable(paramName, inputId) {
       let val = document.getElementById(inputId).value;
@@ -170,11 +167,11 @@
     <p>Press and hold buttons to move</p>
     <div class="grid-container">
       <div class="empty"></div>
-      <button class="btn" onmousedown="startDriving('U')" onmouseup="stopDriving()" ontouchstart="startDriving('U')" ontouchend="stopDriving()">W</button>
+      <button class="btn" onmousedown="startDriving('U')" ontouchstart="startDriving('U')">W</button>
       <div class="empty"></div>
-      <button class="btn" onmousedown="startDriving('L')" onmouseup="stopDriving()" ontouchstart="startDriving('L')" ontouchend="stopDriving()">A</button>
-      <button class="btn" onmousedown="startDriving('D')" onmouseup="stopDriving()" ontouchstart="startDriving('D')" ontouchend="stopDriving()">S</button>
-      <button class="btn" onmousedown="startDriving('R')" onmouseup="stopDriving()" ontouchstart="startDriving('R')" ontouchend="stopDriving()">D</button>
+      <button class="btn" onmousedown="startDriving('L')" ontouchstart="startDriving('L')">A</button>
+      <button class="btn" onmousedown="startDriving('D')" ontouchstart="startDriving('D')">S</button>
+      <button class="btn" onmousedown="startDriving('R')" ontouchstart="startDriving('R')">D</button>
     </div>
     <hr>
     <h3>Tuning Variables</h3>
