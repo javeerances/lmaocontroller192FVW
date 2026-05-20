@@ -13,10 +13,19 @@
     .tab-btn.active { background-color: #007BFF; font-weight: bold; }
     .tab-content { display: none; padding: 20px; background-color: #333; border-radius: 10px; margin: 0 auto; max-width: 400px; }
     .tab-content.active { display: block; }
+    
+    /* Button Grid Styles */
     .grid-container { display: grid; grid-template-columns: repeat(3, 80px); gap: 10px; justify-content: center; margin-top: 20px;}
     .btn { background-color: #007BFF; color: white; border: none; border-radius: 10px; font-size: 24px; font-weight: bold; width: 80px; height: 80px; user-select: none; touch-action: manipulation;}
     .btn:active { background-color: #0056b3; }
     .empty { visibility: hidden; }
+    
+    /* Joystick Styles */
+    .joystick-container { display: flex; justify-content: center; margin: 25px 0; touch-action: none; }
+    .joystick-base { width: 160px; height: 160px; background-color: #444; border-radius: 50%; position: relative; box-shadow: inset 0 0 15px rgba(0,0,0,0.8); }
+    .joystick-stick { width: 70px; height: 70px; background-color: #007BFF; border-radius: 50%; position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%); cursor: pointer; box-shadow: 0 4px 8px rgba(0,0,0,0.5); transition: transform 0.1s ease-out; }
+    .joystick-stick.active { transition: none; background-color: #0056b3;}
+
     .sensor-row { display: flex; justify-content: space-around; margin: 20px 0; font-size: 18px;}
     .ir-indicator { width: 50px; height: 50px; border-radius: 25px; background-color: gray; line-height: 50px; color: black; font-weight: bold; margin: 5px auto;}
     .input-group { margin-bottom: 15px; display: flex; justify-content: space-between; align-items: center; }
@@ -95,7 +104,6 @@
       }
     }
 
-    // --- FIX: UPDATED MODE LETTERS TO MATCH NEW LOWERCASE PIC32 PARSER ---
     function switchMode(mode) {
       if (driveInterval) {
         clearInterval(driveInterval);
@@ -148,6 +156,87 @@
         document.getElementById('us-right').innerText = data[5] + " cm";
       }
     }
+
+    // --- JOYSTICK LOGIC ---
+    let joystickActive = false;
+    let currentJoyCmd = null;
+
+    document.addEventListener("DOMContentLoaded", () => {
+      const base = document.getElementById('joy-base');
+      const stick = document.getElementById('joy-stick');
+      const maxRadius = base.offsetWidth / 2 - stick.offsetWidth / 2;
+
+      const handleStart = (e) => {
+        joystickActive = true;
+        stick.classList.add('active');
+        handleMove(e);
+      };
+
+      const handleMove = (e) => {
+        if (!joystickActive) return;
+        if (e.cancelable) e.preventDefault(); // Prevent scrolling on touch devices
+
+        let rect = base.getBoundingClientRect();
+        let centerX = rect.left + rect.width / 2;
+        let centerY = rect.top + rect.height / 2;
+
+        let clientX = e.touches ? e.touches[0].clientX : e.clientX;
+        let clientY = e.touches ? e.touches[0].clientY : e.clientY;
+
+        let dx = clientX - centerX;
+        let dy = clientY - centerY;
+        let distance = Math.sqrt(dx * dx + dy * dy);
+
+        // Constrain stick to the base
+        if (distance > maxRadius) {
+          dx = (dx / distance) * maxRadius;
+          dy = (dy / distance) * maxRadius;
+          distance = maxRadius;
+        }
+
+        // Move the stick visually
+        stick.style.transform = `translate(calc(-50% + ${dx}px), calc(-50% + ${dy}px))`;
+
+        // Calculate command based on angle
+        let newCmd = null;
+        if (distance > 20) { // Deadzone (ignore slight touches)
+          let angle = Math.atan2(dy, dx) * (180 / Math.PI);
+          
+          if (angle > -45 && angle <= 45) newCmd = 'R';
+          else if (angle > 45 && angle <= 135) newCmd = 'D';
+          else if (angle > -135 && angle <= -45) newCmd = 'U';
+          else newCmd = 'L';
+        }
+
+        // Send command only if it changed
+        if (newCmd !== currentJoyCmd) {
+          stopDriving(); 
+          if (newCmd) {
+            startDriving(newCmd);
+          }
+          currentJoyCmd = newCmd;
+        }
+      };
+
+      const handleEnd = () => {
+        if (!joystickActive) return;
+        joystickActive = false;
+        stick.classList.remove('active');
+        stick.style.transform = `translate(-50%, -50%)`; // Snap back to center
+        stopDriving();
+        currentJoyCmd = null;
+      };
+
+      // Mouse Events
+      base.addEventListener('mousedown', handleStart);
+      document.addEventListener('mousemove', handleMove);
+      document.addEventListener('mouseup', handleEnd);
+
+      // Touch Events
+      base.addEventListener('touchstart', handleStart, { passive: false });
+      document.addEventListener('touchmove', handleMove, { passive: false });
+      document.addEventListener('touchend', handleEnd);
+    });
   </script>
 </head>
 <body>
@@ -164,7 +253,8 @@
   </div>
 
   <div id="content-manual" class="tab-content active">
-    <p>Press and hold buttons to move</p>
+    <p>Press buttons or use joystick</p>
+    
     <div class="grid-container">
       <div class="empty"></div>
       <button class="btn" onmousedown="startDriving('U')" ontouchstart="startDriving('U')">W</button>
@@ -173,6 +263,13 @@
       <button class="btn" onmousedown="startDriving('D')" ontouchstart="startDriving('D')">S</button>
       <button class="btn" onmousedown="startDriving('R')" ontouchstart="startDriving('R')">D</button>
     </div>
+
+    <div class="joystick-container">
+      <div id="joy-base" class="joystick-base">
+        <div id="joy-stick" class="joystick-stick"></div>
+      </div>
+    </div>
+
     <hr>
     <h3>Tuning Variables</h3>
     <div class="input-group">
