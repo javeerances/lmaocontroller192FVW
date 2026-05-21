@@ -104,6 +104,15 @@
       }
     }
 
+    // NEW: Function to send single-burst 90 degree macro directives cleanly
+    function sendMacroCommand(macroChar) {
+      if (driveInterval) {
+        clearInterval(driveInterval);
+        driveInterval = null;
+      }
+      sendBLECommand(macroChar + "\n");
+    }
+
     function switchMode(mode) {
       if (driveInterval) {
         clearInterval(driveInterval);
@@ -174,7 +183,7 @@
 
       const handleMove = (e) => {
         if (!joystickActive) return;
-        if (e.cancelable) e.preventDefault(); // Prevent scrolling on touch devices
+        if (e.cancelable) e.preventDefault(); 
 
         let rect = base.getBoundingClientRect();
         let centerX = rect.left + rect.width / 2;
@@ -187,19 +196,16 @@
         let dy = clientY - centerY;
         let distance = Math.sqrt(dx * dx + dy * dy);
 
-        // Constrain stick to the base
         if (distance > maxRadius) {
           dx = (dx / distance) * maxRadius;
           dy = (dy / distance) * maxRadius;
           distance = maxRadius;
         }
 
-        // Move the stick visually
         stick.style.transform = `translate(calc(-50% + ${dx}px), calc(-50% + ${dy}px))`;
 
-        // Calculate command based on angle
         let newCmd = null;
-        if (distance > 20) { // Deadzone (ignore slight touches)
+        if (distance > 20) { 
           let angle = Math.atan2(dy, dx) * (180 / Math.PI);
           
           if (angle > -45 && angle <= 45) newCmd = 'R';
@@ -208,7 +214,6 @@
           else newCmd = 'L';
         }
 
-        // Send command only if it changed
         if (newCmd !== currentJoyCmd) {
           stopDriving(); 
           if (newCmd) {
@@ -222,17 +227,15 @@
         if (!joystickActive) return;
         joystickActive = false;
         stick.classList.remove('active');
-        stick.style.transform = `translate(-50%, -50%)`; // Snap back to center
+        stick.style.transform = `translate(-50%, -50%)`; 
         stopDriving();
         currentJoyCmd = null;
       };
 
-      // Mouse Events
       base.addEventListener('mousedown', handleStart);
       document.addEventListener('mousemove', handleMove);
       document.addEventListener('mouseup', handleEnd);
 
-      // Touch Events
       base.addEventListener('touchstart', handleStart, { passive: false });
       document.addEventListener('touchmove', handleMove, { passive: false });
       document.addEventListener('touchend', handleEnd);
@@ -262,6 +265,13 @@
       <button class="btn" onmousedown="startDriving('L')" ontouchstart="startDriving('L')">A</button>
       <button class="btn" onmousedown="startDriving('D')" ontouchstart="startDriving('D')">S</button>
       <button class="btn" onmousedown="startDriving('R')" ontouchstart="startDriving('R')">D</button>
+    </div>
+
+    <div style="display: flex; justify-content: center; gap: 15px; margin-top: 15px;">
+      <button class="update-btn" style="padding: 10px 15px; font-weight: bold; background-color: #007BFF;" 
+              onclick="sendMacroCommand('<')">↶ 90° Left</button>
+      <button class="update-btn" style="padding: 10px 15px; font-weight: bold; background-color: #007BFF;" 
+              onclick="sendMacroCommand('>')">90° Right ↷</button>
     </div>
 
     <div class="joystick-container">
